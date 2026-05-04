@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: filestore-api
+  namespace: poc-filestore
+  labels:
+    app: filestore-api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: filestore-api
+  template:
+    metadata:
+      labels:
+        app: filestore-api
+    spec:
+      imagePullSecrets:
+        - name: ocir-secret
+      containers:
+        - name: filestore-api
+          image: sa-bogota-1.ocir.io/<NAMESPACE>/poc/filestore-api:v1.0
+          ports:
+            - containerPort: 8000
+          env:
+            - name: STORAGE_PATH
+              value: "/mnt/filestore"
+          volumeMounts:
+            - name: filestore-vol
+              mountPath: /mnt/filestore
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: filestore-vol
+          persistentVolumeClaim:
+            claimName: pvc-filestore
