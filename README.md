@@ -312,202 +312,19 @@ filestore-api/
 
 ### `requirements.txt`
 
-```txt
-fastapi==0.115.0
-uvicorn[standard]==0.30.0
-python-multipart==0.0.9
-aiofiles==24.1.0
-```
+Define las 4 dependencias del microservicio. FastAPI es el framework web que expone los endpoints REST. Uvicorn es el servidor ASGI que corre la aplicación (el equivalente a Gunicorn pero async). python-multipart es obligatorio para que FastAPI pueda recibir archivos via formularios (multipart/form-data). aiofiles permite leer y escribir archivos de forma asíncrona sin bloquear el event loop, lo que hace que las subidas y descargas sean eficientes.
 
 ---
 
 ### `app/main.py`
 
-```python
-from fastapi import FastAPI, UploadFile, File, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
-import aiofiles
-import os
-import shutil
-from pathlib import Path
-from datetime import datetime
-
-app = FastAPI(
-    title="OCI FileStorage CRUD API",
-    description="Microservicio CRUD sobre OCI File Storage montado como NFS",
-    version="1.0.0"
-)
-
-# Este path es donde se monta el PVC dentro del pod
-STORAGE_PATH = Path(os.getenv("STORAGE_PATH", "/mnt/filestore"))
-STORAGE_PATH.mkdir(parents=True, exist_ok=True)
-
-
-# ──────────────────────────────────────────
-# HEALTH CHECK
-# ──────────────────────────────────────────
-@app.get("/health")
-def health_check():
-    return {"status": "ok", "storage_path": str(STORAGE_PATH)}
-
-
-# ──────────────────────────────────────────
-# CREATE — Subir archivo
-# ──────────────────────────────────────────
-@app.post("/files/{filename}", status_code=201)
-async def upload_file(filename: str, file: UploadFile = File(...)):
-    dest = STORAGE_PATH / filename
-
-    if dest.exists():
-        raise HTTPException(
-            status_code=409,
-            detail=f"El archivo '{filename}' ya existe. Usa PUT para actualizarlo."
-        )
-
-    try:
-        async with aiofiles.open(dest, "wb") as out:
-            content = await file.read()
-            await out.write(content)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error guardando archivo: {str(e)}")
-
-    return {
-        "message": "Archivo subido exitosamente",
-        "filename": filename,
-        "size_bytes": dest.stat().st_size,
-        "created_at": datetime.utcnow().isoformat()
-    }
-
-
-# ──────────────────────────────────────────
-# READ — Descargar archivo
-# ──────────────────────────────────────────
-@app.get("/files/{filename}")
-async def download_file(filename: str):
-    dest = STORAGE_PATH / filename
-
-    if not dest.exists():
-        raise HTTPException(status_code=404, detail=f"Archivo '{filename}' no encontrado")
-
-    return FileResponse(
-        path=str(dest),
-        filename=filename,
-        media_type="application/octet-stream"
-    )
-
-
-# ──────────────────────────────────────────
-# READ ALL — Listar archivos
-# ──────────────────────────────────────────
-@app.get("/files")
-async def list_files():
-    try:
-        files = []
-        for f in STORAGE_PATH.iterdir():
-            if f.is_file():
-                stat = f.stat()
-                files.append({
-                    "filename": f.name,
-                    "size_bytes": stat.st_size,
-                    "modified_at": datetime.utcfromtimestamp(stat.st_mtime).isoformat()
-                })
-        return {"files": files, "total": len(files)}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# ──────────────────────────────────────────
-# UPDATE — Reemplazar archivo existente
-# ──────────────────────────────────────────
-@app.put("/files/{filename}")
-async def update_file(filename: str, file: UploadFile = File(...)):
-    dest = STORAGE_PATH / filename
-
-    if not dest.exists():
-        raise HTTPException(
-            status_code=404,
-            detail=f"Archivo '{filename}' no existe. Usa POST para crearlo."
-        )
-
-    try:
-        async with aiofiles.open(dest, "wb") as out:
-            content = await file.read()
-            await out.write(content)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error actualizando archivo: {str(e)}")
-
-    return {
-        "message": "Archivo actualizado exitosamente",
-        "filename": filename,
-        "size_bytes": dest.stat().st_size,
-        "updated_at": datetime.utcnow().isoformat()
-    }
-
-
-# ──────────────────────────────────────────
-# DELETE — Eliminar archivo
-# ──────────────────────────────────────────
-@app.delete("/files/{filename}")
-async def delete_file(filename: str):
-    dest = STORAGE_PATH / filename
-
-    if not dest.exists():
-        raise HTTPException(status_code=404, detail=f"Archivo '{filename}' no encontrado")
-
-    try:
-        dest.unlink()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error eliminando archivo: {str(e)}")
-
-    return {"message": f"Archivo '{filename}' eliminado exitosamente"}
-
-
-# ──────────────────────────────────────────
-# INFO — Metadata de un archivo
-# ──────────────────────────────────────────
-@app.get("/files/{filename}/info")
-async def file_info(filename: str):
-    dest = STORAGE_PATH / filename
-
-    if not dest.exists():
-        raise HTTPException(status_code=404, detail=f"Archivo '{filename}' no encontrado")
-
-    stat = dest.stat()
-    return {
-        "filename": filename,
-        "size_bytes": stat.st_size,
-        "created_at": datetime.utcfromtimestamp(stat.st_ctime).isoformat(),
-        "modified_at": datetime.utcfromtimestamp(stat.st_mtime).isoformat(),
-        "path": str(dest)
-    }
-```
+Es el corazón del microservicio. Define una API REST con 7 endpoints que operan sobre un directorio del sistema de archivos (que en producción es el NFS montado). La ruta base de almacenamiento se lee de la variable de entorno STORAGE_PATH, lo que permite configurarla sin tocar el código. Cada operación CRUD está mapeada a su método HTTP correcto: POST para crear, GET para leer, PUT para actualizar y DELETE para borrar. Todas las operaciones de I/O son asíncronas gracias a aiofiles. El endpoint /health existe exclusivamente para que Kubernetes pueda verificar que el pod está vivo y listo para recibir tráfico.
 
 ---
 
 ### `Dockerfile`
 
-```dockerfile
-FROM python:3.12-slim
-
-WORKDIR /app
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
-
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-COPY app/ ./app/
-
-RUN mkdir -p /mnt/filestore
-
-ENV STORAGE_PATH=/mnt/filestore
-
-EXPOSE 8000
-
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
-```
+Construye la imagen del contenedor en base a python:3.12-slim para mantenerla liviana. Instala las dependencias de Python desde requirements.txt, copia el código de la aplicación, crea el directorio /mnt/filestore que luego será reemplazado por el volumen NFS, y arranca el servidor Uvicorn escuchando en el puerto 8000 en todas las interfaces. La variable de entorno STORAGE_PATH está definida aquí con su valor por defecto.
 
 ---
 
@@ -570,12 +387,7 @@ Crea estos archivos en `filestore-api/k8s/`.
 
 ### `namespace.yaml`
 
-```yaml
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: poc-filestore
-```
+Crea el namespace poc-filestore en Kubernetes. Es un espacio de nombres aislado donde vivirán todos los recursos de esta POC (pods, servicios, volúmenes, secrets). Sirve para no mezclar estos recursos con otros que pueda haber en el cluster.
 
 ---
 
@@ -583,46 +395,13 @@ metadata:
 
 > ⚠️ Reemplaza `<MT_IP>` con la IP real del Mount Target (anotada en Fase 2)
 
-```yaml
-apiVersion: v1
-kind: PersistentVolume
-metadata:
-  name: pv-filestore
-  namespace: poc-filestore
-spec:
-  capacity:
-    storage: 50Gi
-  accessModes:
-    - ReadWriteMany          # NFS permite múltiples pods simultáneos
-  persistentVolumeReclaimPolicy: Retain
-  storageClassName: ""       # Sin storage class dinámica
-  mountOptions:
-    - hard
-    - nfsvers=3
-  nfs:
-    server: <MT_IP>          # Ej: 10.0.1.45
-    path: /filestore
-```
+Crea un PersistentVolume que representa el File Storage de OCI dentro de Kubernetes. Le dice al cluster que existe un servidor NFS en la IP del Mount Target con el path /filestore, con capacidad de 50Gi. El modo de acceso ReadWriteMany es clave: permite que múltiples pods simultáneamente lean y escriban en el mismo volumen, algo que solo es posible gracias a NFS. La política Retain significa que si el PVC es eliminado, los datos no se borran automáticamente.
 
 ---
 
 ### `pvc.yaml`
 
-```yaml
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: pvc-filestore
-  namespace: poc-filestore
-spec:
-  accessModes:
-    - ReadWriteMany
-  resources:
-    requests:
-      storage: 50Gi
-  storageClassName: ""
-  volumeName: pv-filestore   # Binding estático al PV de arriba
-```
+Crea un PersistentVolumeClaim, que es la "solicitud" de un volumen por parte de la aplicación. Se enlaza estáticamente al PV anterior mediante volumeName: pv-filestore. Los pods no montan el PV directamente, siempre lo hacen a través del PVC, lo que desacopla la aplicación de los detalles de infraestructura del almacenamiento.
 
 ---
 
@@ -643,61 +422,7 @@ kubectl create secret docker-registry ocir-secret \
 
 > ⚠️ Reemplaza la imagen con la URL real de tu OCIR
 
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: filestore-api
-  namespace: poc-filestore
-  labels:
-    app: filestore-api
-spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: filestore-api
-  template:
-    metadata:
-      labels:
-        app: filestore-api
-    spec:
-      imagePullSecrets:
-        - name: ocir-secret
-      containers:
-        - name: filestore-api
-          image: sa-bogota-1.ocir.io/<NAMESPACE>/poc/filestore-api:v1.0
-          ports:
-            - containerPort: 8000
-          env:
-            - name: STORAGE_PATH
-              value: "/mnt/filestore"
-          volumeMounts:
-            - name: filestore-vol
-              mountPath: /mnt/filestore
-          resources:
-            requests:
-              cpu: "250m"
-              memory: "256Mi"
-            limits:
-              cpu: "500m"
-              memory: "512Mi"
-          livenessProbe:
-            httpGet:
-              path: /health
-              port: 8000
-            initialDelaySeconds: 15
-            periodSeconds: 20
-          readinessProbe:
-            httpGet:
-              path: /health
-              port: 8000
-            initialDelaySeconds: 5
-            periodSeconds: 10
-      volumes:
-        - name: filestore-vol
-          persistentVolumeClaim:
-            claimName: pvc-filestore
-```
+Le dice a Kubernetes cómo correr el microservicio. Define 2 réplicas del pod para alta disponibilidad. Especifica la imagen a usar desde OCIR (el registry privado de OCI), monta el PVC en /mnt/filestore dentro del contenedor, y establece límites de CPU y memoria para que ningún pod consuma recursos excesivos. Los liveness y readiness probes apuntan a /health: el liveness reinicia el pod si la app deja de responder, y el readiness evita que el Load Balancer envíe tráfico a un pod que aún no está listo.
 
 ---
 
@@ -705,26 +430,7 @@ spec:
 
 > ⚠️ Reemplaza `<SUBNET_LB_OCID>` con el OCID real de `subnet-lb`
 
-```yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: filestore-api-svc
-  namespace: poc-filestore
-  annotations:
-    service.beta.kubernetes.io/oci-load-balancer-shape: "flexible"
-    service.beta.kubernetes.io/oci-load-balancer-shape-flex-min: "10"
-    service.beta.kubernetes.io/oci-load-balancer-shape-flex-max: "100"
-    service.beta.kubernetes.io/oci-load-balancer-subnet1: "<SUBNET_LB_OCID>"
-spec:
-  type: LoadBalancer
-  selector:
-    app: filestore-api
-  ports:
-    - protocol: TCP
-      port: 80
-      targetPort: 8000
-```
+Expone el Deployment al mundo exterior creando un Load Balancer de OCI automáticamente gracias al tipo LoadBalancer. Las anotaciones le indican a OCI que cree un LB flexible con capacidad entre 10 y 100 Mbps, y que lo coloque en la subnet pública (subnet-lb). El servicio recibe tráfico en el puerto 80 y lo redirige al puerto 8000 de los pods. Una vez creado, OCI asigna una IP pública que es la URL de entrada a toda la aplicación.
 
 ---
 
