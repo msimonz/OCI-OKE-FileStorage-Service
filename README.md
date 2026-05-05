@@ -615,8 +615,6 @@ kubectl rollout status deployment/filestore-api -n poc-filestore
 
 ---
 
----
-
 ## 🧪 Resultados POC
 
 A continuación se muestran capturas de las pruebas realizadas contra la API desplegada en OKE (a través de la IP pública del Load Balancer `132.226.48.218`), ejecutadas desde Postman recorriendo todo el ciclo CRUD del microservicio.
