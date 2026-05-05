@@ -125,6 +125,7 @@ Los nodos privados necesitan salida a internet (para descargar imágenes, etc.):
 ### 1.4 — Internet Gateway (para subnets públicas)
 
 Los servicios públicos requieren conexión a internet:
+
 **sn-lb**
 ```
 Usuario en internet → Internet Gateway → Load Balancer → Pods
