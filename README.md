@@ -20,12 +20,12 @@
                         │                                                      │
     Tu máquina          │    ┌──────────────┐      ┌──────────────────────┐    │
     local/internet ─────┼───►│ Load Balancer│─────►│   OKE Cluster        │    │
-                        │    │ (subnet-lb)  │      │  ┌────────────────┐  │    │
+                        │    │ (sn-lb)      │      │  ┌────────────────┐  │    │
                         │    └──────────────┘      │  │ Pod: FastAPI   │  │    │
                         │                          │  │ (2 réplicas)   │  │    │
     Tú (admin) ─────────┼──► Bastion Host ─────►   │  └───────┬────────┘  │    │
                         │    (SSH + kubectl)       │          │           │    │
-                        │    (subnet-bastion)      └──────────┼───────────┘    │
+                        │    (sn-bastion)          └──────────┼───────────┘    │
                         │                                     │                │
                         │                         ┌───────────▼───────────┐    │
                         │                         │  OCI File Storage     │    │
@@ -106,7 +106,7 @@ Necesitas **3 subnets** con los siguientes rangos:
 Para cada subnet: **Networking → VCN → Create Subnet** con los valores de la tabla.
 
 - `sn-oke-nodes` → Route Table: la privada con NAT Gateway (ver paso 1.3)
-- `sn-lb` y `subnet-bastion` → Route Table: la que tiene Internet Gateway
+- `sn-lb` y `sn-bastion-host` → Route Table: la que tiene Internet Gateway
 
 ---
 
@@ -115,11 +115,11 @@ Para cada subnet: **Networking → VCN → Create Subnet** con los valores de la
 Los nodos privados necesitan salida a internet (para descargar imágenes, etc.):
 
 1. En tu VCN → **NAT Gateways → Create NAT Gateway**
-   - **Name:** `nat-gw-poc`
+   - **Name:** `nat-gw-oke`
 2. Crea una Route Table privada:
    - **Name:** `rt-private-nodes`
    - Regla: Destino `0.0.0.0/0` → Target: `nat-gw-poc`
-3. Edita `subnet-oke-nodes` y asígnale esta route table
+3. Edita `sn-oke-nodes` y asígnale esta route table
 
 ---
 ### 1.4 — Internet Gateway (para subnets públicas)
@@ -128,12 +128,10 @@ Los servicios públicos requieren conexión a internet:
 **sn-lb**
 ```
 Usuario en internet → Internet Gateway → Load Balancer → Pods
-
 ```
 **sn-bastion-host**
 ```
 Tú desde tu casa → Internet Gateway → Bastion Host (SSH)
-
 ```
 1. En tu VCN → **Internet Gateways → Create Internet Gateway**
    - **Name:** `ig-oke-vcn`
@@ -473,9 +471,9 @@ Le dice a Kubernetes cómo correr el microservicio. Define 2 réplicas del pod p
 
 ### `service.yaml`
 
-> ⚠️ Reemplaza `<SUBNET_LB_OCID>` con el OCID real de `subnet-lb`
+> ⚠️ Reemplaza `<SUBNET_LB_OCID>` con el OCID real de `sn-lb`
 
-Expone el Deployment al mundo exterior creando un Load Balancer de OCI automáticamente gracias al tipo LoadBalancer. Las anotaciones le indican a OCI que cree un LB flexible con capacidad entre 10 y 100 Mbps, y que lo coloque en la subnet pública (subnet-lb). El servicio recibe tráfico en el puerto 80 y lo redirige al puerto 8000 de los pods. Una vez creado, OCI asigna una IP pública que es la URL de entrada a toda la aplicación.
+Expone el Deployment al mundo exterior creando un Load Balancer de OCI automáticamente gracias al tipo LoadBalancer. Las anotaciones le indican a OCI que cree un LB flexible con capacidad entre 10 y 100 Mbps, y que lo coloque en la subnet pública (sn-lb). El servicio recibe tráfico en el puerto 80 y lo redirige al puerto 8000 de los pods. Una vez creado, OCI asigna una IP pública que es la URL de entrada a toda la aplicación.
 
 ---
 
@@ -623,9 +621,9 @@ kubectl rollout status deployment/filestore-api -n poc-filestore
 |---------|---------------|----------|
 | PVC en `Pending` | IP del MT incorrecta o puerto NFS bloqueado | Verificar Security List y la IP del Mount Target |
 | Pod en `ImagePullBackOff` | Secret OCIR incorrecto o imagen no existe | Verificar el secret y que la imagen fue pusheada |
-| LB sin `EXTERNAL-IP` | OCID de subnet-lb incorrecto en el annotation | Revisar el `service.yaml` y re-aplicar |
+| LB sin `EXTERNAL-IP` | OCID de sn-lb incorrecto en el annotation | Revisar el `service.yaml` y re-aplicar |
 | Error 500 al subir | `/mnt/filestore` sin permisos de escritura | Verificar el Export del File Storage |
-| SSH al Bastion falla | Puerto 22 bloqueado en Security List | Agregar regla de ingress en `subnet-bastion` |
+| SSH al Bastion falla | Puerto 22 bloqueado en Security List | Agregar regla de ingress en `sn-bastion` |
 
 ---
 
@@ -634,9 +632,9 @@ kubectl rollout status deployment/filestore-api -n poc-filestore
 | Componente | Tipo | Propósito |
 |---|---|---|
 | `vcn-poc-oke` | VCN | Red principal `10.0.0.0/16` |
-| `subnet-oke-nodes` | Subnet Privada `10.0.1.0/24` | Nodos K8s y File Storage |
-| `subnet-lb` | Subnet Pública `10.0.2.0/24` | Load Balancer externo |
-| `subnet-bastion` | Subnet Pública `10.0.3.0/24` | Acceso SSH al cluster |
+| `sn-oke-nodes` | Subnet Privada `10.0.1.0/24` | Nodos K8s y File Storage |
+| `sn-lb` | Subnet Pública `10.0.2.0/24` | Load Balancer externo |
+| `sn-bastion` | Subnet Pública `10.0.3.0/24` | Acceso SSH al cluster |
 | `nat-gw-poc` | NAT Gateway | Salida a internet para nodos privados |
 | `fs-poc-files` | OCI File Storage | Almacenamiento NFS persistente |
 | `mt-poc` | Mount Target | Punto de montaje NFS |
