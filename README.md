@@ -51,6 +51,7 @@
 - [Fase 9 — Pruebas](#-fase-9--verificar-y-probar-la-api)
 - [Fase 10 — Troubleshooting](#-fase-10--troubleshooting)
 - [Resumen de Componentes](#-resumen-de-componentes)
+- [Resultados POC](#-resultados-poc)
 
 ---
 
@@ -616,7 +617,7 @@ kubectl rollout status deployment/filestore-api -n poc-filestore
 
 ---
 
-## 🧪 Resultados
+## 🧪 Resultados POC
 
 A continuación se muestran capturas de las pruebas realizadas contra la API desplegada en OKE (a través de la IP pública del Load Balancer `132.226.48.218`), ejecutadas desde Postman recorriendo todo el ciclo CRUD del microservicio.
 
