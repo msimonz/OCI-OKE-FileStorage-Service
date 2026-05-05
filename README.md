@@ -60,18 +60,22 @@
 Antes de tocar la consola, ten listos estos valores. Los irás completando a medida que avanzas:
 
 ```bash
-TENANCY_OCID      = ocid1.tenancy.oc1..xxxxx
-COMPARTMENT_OCID  = ocid1.compartment.oc1..xxxxx
-REGION            = sa-bogota-1        # o tu región
-VCN_OCID          = (Fase 1)
-SUBNET_OKE_OCID   = (Fase 1)
-SUBNET_LB_OCID    = (Fase 1)
-SUBNET_BASTION    = (Fase 1)
-MT_IP             = (Fase 2 — IP del Mount Target)
-EXPORT_PATH       = /filestore
-OKE_CLUSTER_OCID  = (Fase 3)
-IP_BASTION        = (Fase 4)
-OCIR_NAMESPACE    = (Fase 6)
+TENANCY_OCID             = ocid1.tenancy.oc1..xxxxx
+OBJECT_STORAGE_NAMESPACE = ixfl...
+COMPARTMENT_OCID         = ocid1.compartment.oc1..xxxxx
+USER_OCID                = ocid1.user.oc1..xxxxxxx
+REGION                   = us-ashburn-1  (o la tuya, ej: us-ashburn-1)
+VCN_OCID                 = (lo obtienes en Fase 1)
+SUBNET_OKE_OCID          = (lo obtienes en Fase 1)
+SUBNET_LB_OCID           = (lo obtienes en Fase 1)
+SUBNET_BASTION           = (lo obtienes en Fase 1)
+MT_OCID                  = (Mount Target, Fase 2)
+EXPORT_PATH              = /filestore
+STORAGE_PATH             = /mnt/filestore
+MT_IP                    = (Mount Target, Fase 2)
+OKE_CLUSTER_OCID         = (lo obtienes en Fase 3)
+OCIR_REPO                = (lo obtienes en Fase 6)
+IMAGE_TAG                = v1.0
 ```
 
 ---
@@ -82,7 +86,7 @@ OCIR_NAMESPACE    = (Fase 6)
 
 1. Ve a **Networking → Virtual Cloud Networks → Create VCN**
 2. Configura:
-   - **Name:** `vcn-poc-oke`
+   - **Name:** `vcn-oke`
    - **IPv4 CIDR:** `10.0.0.0/16`
    - ✅ Selecciona **"VCN with Internet Connectivity"** (crea IGW y Route Table automáticamente)
 3. Clic en **Create VCN**
@@ -95,14 +99,14 @@ Necesitas **3 subnets** con los siguientes rangos:
 
 | Nombre | CIDR | Tipo | Uso |
 |--------|------|------|-----|
-| `subnet-oke-nodes` | `10.0.1.0/24` | **Privada** | Nodos del cluster K8s |
-| `subnet-lb` | `10.0.2.0/24` | **Pública** | Load Balancer externo |
-| `subnet-bastion` | `10.0.3.0/24` | **Pública** | Acceso SSH al cluster |
+| `sn-oke-nodes` | `10.0.1.0/24` | **Privada** | Nodos del cluster K8s |
+| `sn-lb` | `10.0.2.0/24` | **Pública** | Load Balancer externo |
+| `sn-bastion-host` | `10.0.3.0/24` | **Pública** | Acceso SSH al cluster |
 
 Para cada subnet: **Networking → VCN → Create Subnet** con los valores de la tabla.
 
-- `subnet-oke-nodes` → Route Table: la privada con NAT Gateway (ver paso 1.3)
-- `subnet-lb` y `subnet-bastion` → Route Table: la que tiene Internet Gateway
+- `sn-oke-nodes` → Route Table: la privada con NAT Gateway (ver paso 1.3)
+- `sn-lb` y `subnet-bastion` → Route Table: la que tiene Internet Gateway
 
 ---
 
@@ -118,10 +122,29 @@ Los nodos privados necesitan salida a internet (para descargar imágenes, etc.):
 3. Edita `subnet-oke-nodes` y asígnale esta route table
 
 ---
+### 1.4 — Internet Gateway (para subnets públicas)
 
+Los servicios públicos requieren conexión a internet:
+**sn-lb**
+```
+Usuario en internet → Internet Gateway → Load Balancer → Pods
+
+```
+**sn-bastion-host**
+```
+Tú desde tu casa → Internet Gateway → Bastion Host (SSH)
+
+```
+1. En tu VCN → **Internet Gateways → Create Internet Gateway**
+   - **Name:** `ig-oke-vcn`
+2. Crea una Route Table pública:
+   - **Name:** `rt-public`
+3. Edita `sn-lb` y `sn-bastion-host` y asígnales esta route table
+
+---
 ### 1.4 — Security Lists
 
-#### `subnet-oke-nodes` — Ingress Rules
+#### `sn-oke-nodes` — Ingress Rules
 
 | Source CIDR | Protocolo | Puerto | Descripción |
 |-------------|-----------|--------|-------------|
@@ -132,7 +155,7 @@ Los nodos privados necesitan salida a internet (para descargar imágenes, etc.):
 | `10.0.1.0/24` | TCP | 111 | Portmapper |
 | `10.0.1.0/24` | UDP | 111 | Portmapper |
 
-#### `subnet-oke-nodes` — Egress Rules
+#### `sn-oke-nodes` — Egress Rules
 | Source CIDR | Protocolo | Puerto | Descripción |
 |-------------|-----------|--------|-------------|
 | `10.0.1.0/24` | TCP | 2048–2050 | NFS |
@@ -140,14 +163,14 @@ Los nodos privados necesitan salida a internet (para descargar imágenes, etc.):
 | `10.0.1.0/24` | TCP | 111 | Portmapper |
 | `10.0.1.0/24` | UDP | 111 | Portmapper |
 
-#### `subnet-lb` — Ingress Rules
+#### `sn-lb` — Ingress Rules
 
 | Source CIDR | Protocolo | Puerto | Descripción |
 |-------------|-----------|--------|-------------|
 | `0.0.0.0/0` | TCP | 80 | HTTP público |
 | `0.0.0.0/0` | TCP | 443 | HTTPS público |
 
-#### `subnet-bastion` — Ingress Rules
+#### `sn-bastion-host` — Ingress Rules
 
 | Source CIDR | Protocolo | Puerto | Descripción |
 |-------------|-----------|--------|-------------|
@@ -171,8 +194,8 @@ Los nodos privados necesitan salida a internet (para descargar imágenes, etc.):
 
 En el mismo panel:
 - **Name:** `mt-poc`
-- **VCN:** `vcn-poc-oke`
-- **Subnet:** `subnet-oke-nodes` ← misma red que los pods
+- **VCN:** `vcn-oke`
+- **Subnet:** `sn-oke-nodes` ← misma red que los pods
 - Clic en **Create**
 
 > 📌 Anota la **IP del Mount Target** (visible en la sección del Mount Target, algo como `10.0.1.XX`). La usarás en el PersistentVolume de K8s.
@@ -196,22 +219,35 @@ En el mismo panel:
 
 | Campo | Valor |
 |-------|-------|
-| Name | `oke-poc-cluster` |
+| Name | `oke-cluster-1` |
 | Kubernetes Version | La más reciente disponible (ej: `v1.30.x`) |
-| VCN | `vcn-poc-oke` |
-| LB Subnets | `subnet-lb` |
-| API Endpoint Subnet | `subnet-oke-nodes` |
+| VCN | `vcn-oke` |
+| LB Subnets | `sn-lb` |
+| API Endpoint Subnet | `sn-oke-nodes` |
 | Assign public IP al API | ❌ NO (accedemos por Bastion) |
 
-### 3.2 — Configurar el Node Pool
+### 3.2 — Configurar el Node Pools
 
 | Campo | Valor |
 |-------|-------|
-| Name | `nodepool-poc` |
+| Name | `high-mem` |
 | Shape | `VM.Standard.E4.Flex` (2 OCPUs, 16 GB RAM) |
 | Image | Oracle Linux 8 (compatible con la versión de K8s) |
-| Nodes | `2` |
-| Subnet | `subnet-oke-nodes` |
+| OCPUs | `3` |
+| RAM | `32`GB |
+| Nodes | `1` |
+| Subnet | `sn-oke-nodes` |
+| SSH Key | Agrega tu llave pública |
+
+| Campo | Valor |
+|-------|-------|
+| Name | `platform` |
+| Shape | `VM.Standard.E4.Flex` (2 OCPUs, 16 GB RAM) |
+| Image | Oracle Linux 8 (compatible con la versión de K8s) |
+| OCPUs | `2` |
+| RAM | `24`GB |
+| Nodes | `1` |
+| Subnet | `sn-oke-nodes` |
 | SSH Key | Agrega tu llave pública |
 
 Clic en **Create Cluster** y espera ~10 minutos hasta que el estado sea **Active**.
@@ -226,11 +262,11 @@ Clic en **Create Cluster** y espera ~10 minutos hasta que el estado sea **Active
 
 | Campo | Valor |
 |-------|-------|
-| Name | `bastion-poc` |
+| Name | `oke-bastion-host` |
 | Image | Oracle Linux 8 |
 | Shape | `VM.Standard.E2.1.Micro` (Free Tier ✅) |
-| VCN | `vcn-poc-oke` |
-| Subnet | `subnet-bastion` |
+| VCN | `vcn-oke` |
+| Subnet | `sn-bastion-host` |
 | IPv4 pública | ✅ Asignar |
 | SSH Key | Pega tu llave pública |
 
@@ -272,7 +308,7 @@ oci setup config
 El wizard pedirá:
 - **User OCID** → Tu perfil en OCI Console → copiar OCID
 - **Tenancy OCID** → Administration → Tenancy Details
-- **Region** → ej: `sa-bogota-1`
+- **Region** → ej: `us-ashburn-1`
 - **API Key** → el CLI genera un par. Copia la **llave pública** que muestra
 
 Luego sube la llave pública a OCI:
@@ -289,7 +325,7 @@ OKE_CLUSTER_OCID="ocid1.cluster.oc1..xxxxx"   # reemplaza con el tuyo
 oci ce cluster create-kubeconfig \
   --cluster-id $OKE_CLUSTER_OCID \
   --file $HOME/.kube/config \
-  --region sa-bogota-1 \
+  --region us-ashburn-1 \
   --token-version 2.0.0 \
   --kube-endpoint PRIVATE_ENDPOINT
 
@@ -357,7 +393,7 @@ Construye la imagen del contenedor en base a python:3.12-slim para mantenerla li
 ### 6.1 — Crear repositorio en OCIR
 
 1. **Developer Services → Container Registry → Create Repository**
-   - **Name:** `poc/filestore-api`
+   - **Name:** `filestore-api`
    - **Access:** Private
 2. Anota el **namespace** de OCIR (algo como `axyz1234abc`, visible en la pantalla)
 
@@ -371,7 +407,7 @@ Construye la imagen del contenedor en base a python:3.12-slim para mantenerla li
 
 ```bash
 # Variables — ajusta con tus valores reales
-REGION="sa-bogota-1"
+REGION="us-ashburn-1"
 NAMESPACE="axyz1234abc"
 REPO="poc/filestore-api"
 TAG="v1.0"
@@ -418,7 +454,7 @@ Crea un PersistentVolumeClaim, que es la "solicitud" de un volumen por parte de 
 
 ```bash
 kubectl create secret docker-registry ocir-secret \
-  --docker-server=sa-bogota-1.ocir.io \
+  --docker-server=us-ashburn-1.ocir.io \
   --docker-username="<NAMESPACE>/<tu_username>" \
   --docker-password="<tu_auth_token>" \
   --docker-email="<tu_email>" \
@@ -463,7 +499,7 @@ kubectl apply -f ~/k8s/namespace.yaml
 
 # 2. Crear secret para OCIR
 kubectl create secret docker-registry ocir-secret \
-  --docker-server=sa-bogota-1.ocir.io \
+  --docker-server=us-ashburn-1.ocir.io \
   --docker-username="<NAMESPACE>/<username>" \
   --docker-password="<auth_token>" \
   --docker-email="<email>" \
