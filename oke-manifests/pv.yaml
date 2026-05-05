@@ -14,5 +14,5 @@ spec:
     - hard
     - nfsvers=3
   nfs:
-    server: <MT_IP>          # Ej: 10.0.1.45
+    server: <MT_IP>        # Ej: 10.0.1.45
     path: /filestore

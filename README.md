@@ -131,6 +131,14 @@ Los nodos privados necesitan salida a internet (para descargar imágenes, etc.):
 | `10.0.1.0/24` | TCP | 111 | Portmapper |
 | `10.0.1.0/24` | UDP | 111 | Portmapper |
 
+#### `subnet-oke-nodes` — Egress Rules
+| Source CIDR | Protocolo | Puerto | Descripción |
+|-------------|-----------|--------|-------------|
+| `10.0.1.0/24` | TCP | 2048–2050 | NFS |
+| `10.0.1.0/24` | UDP | 2048 | NFS |
+| `10.0.1.0/24` | TCP | 111 | Portmapper |
+| `10.0.1.0/24` | UDP | 111 | Portmapper |
+
 #### `subnet-lb` — Ingress Rules
 
 | Source CIDR | Protocolo | Puerto | Descripción |
@@ -603,6 +611,88 @@ kubectl rollout status deployment/filestore-api -n poc-filestore
 | `pvc-filestore` | PersistentVolumeClaim K8s | Claim del volumen para los pods |
 | `filestore-api` | Deployment K8s (2 réplicas) | Microservicio FastAPI |
 | `filestore-api-svc` | LoadBalancer Service K8s | Exposición pública HTTP |
+
+---
+
+---
+
+## 🧪 Resultados
+
+A continuación se muestran capturas de las pruebas realizadas contra la API desplegada en OKE (a través de la IP pública del Load Balancer `132.226.48.218`), ejecutadas desde Postman recorriendo todo el ciclo CRUD del microservicio.
+
+### 1. Health Check — `GET /health`
+
+![Health Check](results/1.png)
+
+Verificación de que el pod está vivo y el volumen NFS está correctamente montado. La API responde **200 OK** con `{"status": "ok", "storage_path": "/mnt/filestore"}`, confirmando que el `STORAGE_PATH` definido por la variable de entorno apunta al File Storage de OCI.
+
+---
+
+### 2. Listado inicial — `GET /files`
+
+![Listado vacío](results/2.png)
+
+Primer listado de archivos sobre el File Storage recién montado. La respuesta **200 OK** devuelve `{"files": [], "total": 0}`, lo que confirma que el volumen está accesible desde el pod pero aún no contiene ningún archivo.
+
+---
+
+### 3. Subida de archivo — `POST /files/documento.pdf`
+
+![Subida exitosa](results/3.png)
+
+Carga de un archivo (`HV_SIMON_MARQUEZ.pdf`) usando `multipart/form-data` y guardado en el NFS bajo el nombre `documento.pdf`. La API responde **201 Created** con metadata del archivo: tamaño (`591273` bytes) y timestamp de creación.
+
+---
+
+### 4. Validación de duplicados — `POST` sobre archivo existente
+
+![Conflicto 409](results/4.png)
+
+Al intentar volver a subir un archivo con el mismo nombre, la API responde **409 Conflict** con el mensaje `"El archivo 'documento.pdf' ya existe. Usa PUT para actualizarlo."`. Esto demuestra que el endpoint distingue correctamente entre creación (POST) y actualización (PUT).
+
+---
+
+### 5. Subida de un segundo archivo — `POST /files/documento1.pdf`
+
+![Segunda subida](results/5.png)
+
+Subida de un segundo archivo distinto (`Apphasia - Modelo de Dominio (ER) (1).png`) renombrado como `documento1.pdf`. Respuesta **201 Created** confirmando que múltiples archivos pueden coexistir en el mismo volumen NFS compartido entre las réplicas del Deployment.
+
+---
+
+### 6. Metadata de un archivo — `GET /files/documento.pdf/info`
+
+![Metadata del archivo](results/6.png)
+
+Consulta de la información detallada del archivo: nombre, tamaño en bytes, fecha de creación, fecha de modificación y ruta absoluta dentro del NFS (`/mnt/filestore/documento.pdf`). Útil para inspeccionar el estado del archivo sin necesidad de descargarlo.
+
+---
+
+### 7. Descarga de archivo — `GET /files/documento.pdf`
+
+![Descarga del archivo](results/7.png)
+
+Descarga del contenido binario del PDF directamente desde el File Storage. La respuesta **200 OK** devuelve el archivo crudo, demostrando que el flujo de lectura asíncrono con `aiofiles` funciona correctamente sobre el volumen NFS.
+
+---
+
+### 8. Actualización de archivo — `PUT /files/documento.pdf`
+
+![Actualización exitosa](results/8.png)
+
+Reemplazo del contenido de `documento.pdf` con un nuevo archivo (`IMG-20190409-WA0002.jpg`). La API responde **200 OK** con `"Archivo actualizado exitosamente"` y el nuevo `size_bytes` y `updated_at`, confirmando que el PUT sobreescribe correctamente el contenido en el NFS.
+
+---
+
+### 9. Eliminación de archivo — `DELETE /files/documento1.pdf`
+
+![Eliminación exitosa](results/9.png)
+
+Borrado del archivo `documento1.pdf` desde el File Storage. La respuesta **200 OK** con `"Archivo 'documento1.pdf' eliminado exitosamente"` cierra el ciclo CRUD completo (Create, Read, Update, Delete) operando contra el almacenamiento NFS persistente expuesto en OCI.
+
+---
+
+> ✅ **Conclusión de la POC:** todos los endpoints CRUD operan correctamente sobre el OCI File Storage montado vía NFS dentro del cluster OKE, accesible públicamente a través del Load Balancer gestionado automáticamente por OCI.
 
 ---
 

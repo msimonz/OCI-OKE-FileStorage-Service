@@ -19,7 +19,7 @@ spec:
         - name: ocir-secret
       containers:
         - name: filestore-api
-          image: sa-bogota-1.ocir.io/<NAMESPACE>/poc/filestore-api:v1.0
+          image: us-ashburn-1.ocir.io/<TU_NAMESPACE>/filestore-api:v1.0
           ports:
             - containerPort: 8000
           env:
