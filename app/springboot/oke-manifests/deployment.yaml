@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: filestore-api-java
+  namespace: poc-filestore
+  labels:
+    app: filestore-api-java
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: filestore-api-java
+  template:
+    metadata:
+      labels:
+        app: filestore-api-java
+    spec:
+      imagePullSecrets:
+        - name: ocir-secret
+      containers:
+        - name: filestore-api-java
+          image: us-ashburn-1.ocir.io/<NAMESPACE>/filestore-api-java:v1.0
+          ports:
+            - containerPort: 8080
+          env:
+            - name: STORAGE_PATH
+              value: "/mnt/filestore"
+          volumeMounts:
+            - name: filestore-vol
+              mountPath: /mnt/filestore
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"      # Java necesita más RAM que Python
+            limits:
+              cpu: "500m"
+              memory: "768Mi"
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            initialDelaySeconds: 30   # Java tarda más en arrancar
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 10
+      volumes:
+        - name: filestore-vol
+          persistentVolumeClaim:
+            claimName: pvc-filestore   # ← mismo PVC que Python

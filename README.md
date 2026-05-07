@@ -1,11 +1,13 @@
-# 🗂️ OCI FileStorage CRUD API — POC Completa
+# 🗂️ OCI FileStorage CRUD API — POC Completa (Python + Spring Boot)
 
-> Microservicio REST sobre **OCI File Storage (NFS)**, desplegado en **Oracle Kubernetes Engine (OKE)**, administrado desde un **Bastion Host**.
+> Dos microservicios REST (uno en **Python/FastAPI** y otro en **Java/Spring Boot**) sobre **OCI File Storage (NFS)**, desplegados en **Oracle Kubernetes Engine (OKE)** compartiendo el mismo volumen persistente, administrados desde un **Bastion Host**.
 
 ---
 
 [![Python](https://img.shields.io/badge/Python-3.12-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![Java](https://img.shields.io/badge/Java-17-ED8B00?style=for-the-badge&logo=openjdk&logoColor=white)](https://openjdk.org/projects/jdk/17/)
+[![Spring Boot](https://img.shields.io/badge/Spring_Boot-3.2.5-6DB33F?style=for-the-badge&logo=spring-boot&logoColor=white)](https://spring.io/projects/spring-boot)
 [![Kubernetes](https://img.shields.io/badge/Kubernetes-OKE-326CE5?style=for-the-badge&logo=kubernetes&logoColor=white)](https://docs.oracle.com/en-us/iaas/Content/ContEng/home.htm)
 [![OCI](https://img.shields.io/badge/Oracle_Cloud-Infrastructure-F80000?style=for-the-badge&logo=oracle&logoColor=white)](https://cloud.oracle.com/)
 [![Docker](https://img.shields.io/badge/Docker-Enabled-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://www.docker.com/)
@@ -23,9 +25,12 @@
                         │    │ (sn-lb)      │      │  ┌────────────────┐  │    │
                         │    └──────────────┘      │  │ Pod: FastAPI   │  │    │
                         │                          │  │ (2 réplicas)   │  │    │
-    Tú (admin) ─────────┼──► Bastion Host ─────►   │  └───────┬────────┘  │    │
-                        │    (SSH + kubectl)       │          │           │    │
-                        │    (sn-bastion)          └──────────┼───────────┘    │
+                        │                          │  └───────┬────────┘  │    │
+                        │                          │  ┌───────┴────────┐  │    │
+    Tú (admin) ─────────┼──► Bastion Host ─────►   │  │ Pod: SpringBoot│  │    │
+                        │    (SSH + kubectl)       │  │ (2 réplicas)   │  │    │
+                        │    (sn-bastion)          │  └───────┬────────┘  │    │
+                        │                          └──────────┼───────────┘    │
                         │                                     │                │
                         │                         ┌───────────▼───────────┐    │
                         │                         │  OCI File Storage     │    │
@@ -34,6 +39,8 @@
                         │                         └───────────────────────┘    │
                         └──────────────────────────────────────────────────────┘
 ```
+
+> 💡 El mismo `pvc-filestore` es montado por el microservicio Python y el microservicio Spring Boot simultáneamente. Un archivo subido por uno es visible inmediatamente por el otro, gracias al modo de acceso `ReadWriteMany` de NFS.
 
 ---
 
@@ -45,11 +52,14 @@
 - [Fase 3 — Cluster OKE](#-fase-3--crear-el-cluster-oke)
 - [Fase 4 — Bastion Host](#-fase-4--crear-el-bastion-host)
 - [Fase 5 — Código Python](#-fase-5--el-microservicio-en-python)
+- [Fase 5B — Código Spring Boot](#-fase-5b--el-microservicio-en-spring-boot)
+- [Por qué NO usamos Multipart](#-por-qué-no-usamos-multipart)
 - [Fase 6 — OCIR (Imagen Docker)](#-fase-6--publicar-la-imagen-en-ocir)
 - [Fase 7 — Manifiestos K8s](#-fase-7--manifiestos-de-kubernetes)
 - [Fase 8 — Despliegue](#-fase-8--desplegar-todo-en-oke)
 - [Fase 9 — Pruebas](#-fase-9--verificar-y-probar-la-api)
 - [Fase 10 — Troubleshooting](#-fase-10--troubleshooting)
+- [Colección de Postman](#-colección-de-postman)
 - [Resumen de Componentes](#-resumen-de-componentes)
 - [Resultados POC](#-resultados-poc)
 
@@ -336,21 +346,39 @@ kubectl get nodes
 
 ## 🐍 Fase 5 — El Microservicio en Python
 
-### Estructura del proyecto
+### Estructura general del proyecto
 
 ```
-filestore-api/
+OCI-OKE-FileStorage-Service/
 ├── app/
-│   └── main.py          ← API FastAPI con CRUD completo
-├── Dockerfile
-├── requirements.txt
-└── k8s/
-    ├── namespace.yaml
-    ├── pv.yaml
-    ├── pvc.yaml
-    ├── deployment.yaml
-    └── service.yaml
+│   ├── python/                ← Microservicio FastAPI
+│   │   ├── main.py
+│   │   ├── Dockerfile
+│   │   ├── requirements.txt
+│   │   └── oke-manifests/
+│   │       ├── namespace.yaml
+│   │       ├── pv.yaml
+│   │       ├── pvc.yaml
+│   │       ├── deployment.yaml
+│   │       ├── service.yaml
+│   │       └── secret-example.yaml
+│   └── springboot/            ← Microservicio Spring Boot
+│       ├── pom.xml
+│       ├── Dockerfile
+│       ├── src/main/java/com/poc/filestore/
+│       │   ├── FileStoreApplication.java
+│       │   ├── controller/FileController.java
+│       │   └── service/FileService.java
+│       ├── src/main/resources/application.yml
+│       └── oke-manifests/
+│           ├── deployment.yaml
+│           └── service.yaml
+├── Postman/
+│   └── POC_OKE-FileStorage.json
+└── results/
 ```
+
+> Los manifiestos `namespace.yaml`, `pv.yaml` y `pvc.yaml` son **compartidos** — solo se crean una vez (desde `app/python/oke-manifests/`) y son reutilizados por el microservicio Spring Boot.
 
 ---
 
@@ -387,41 +415,194 @@ Construye la imagen del contenedor en base a python:3.12-slim para mantenerla li
 
 ---
 
+## 🍃 Fase 5B — El Microservicio en Spring Boot
+
+Microservicio equivalente al de Python, escrito con **Java 17 + Spring Boot 3.2.5**, desplegado en el mismo cluster OKE y namespace, montando el mismo `pvc-filestore`. Un archivo subido por uno es visible inmediatamente por el otro.
+
+### Estructura del proyecto
+
+```
+app/springboot/
+├── pom.xml
+├── Dockerfile
+├── src/
+│   └── main/
+│       ├── java/com/poc/filestore/
+│       │   ├── FileStoreApplication.java
+│       │   ├── controller/FileController.java
+│       │   └── service/FileService.java
+│       └── resources/application.yml
+└── oke-manifests/
+    ├── deployment.yaml
+    └── service.yaml
+```
+
+---
+
+### `pom.xml`
+
+Define el proyecto Maven con `spring-boot-starter-parent` 3.2.5 y Java 17. Las dependencias clave son `spring-boot-starter-web` (servidor REST embebido sobre Tomcat), `spring-boot-starter-actuator` (expone `/actuator/health` para los probes de Kubernetes) y `lombok` (reduce el boilerplate). El plugin de Spring Boot empaqueta todo en un JAR ejecutable autocontenido.
+
+---
+
+### `application.yml`
+
+Archivo de configuración principal. Define el puerto del servidor (`8080`), lee la ruta de almacenamiento desde la variable de entorno `STORAGE_PATH` (con fallback a `/mnt/filestore`) y habilita el endpoint de health del actuator con detalles completos para que Kubernetes lo consulte.
+
+---
+
+### `FileStoreApplication.java`
+
+Punto de entrada del microservicio. Una sola clase con `@SpringBootApplication` que arranca el contenedor de Spring y deja el servidor Tomcat escuchando en el puerto configurado.
+
+---
+
+### `FileController.java`
+
+Define los endpoints REST bajo el prefijo `/files`. Implementa los 6 verbos del CRUD: `GET /files` (listar), `POST /files/{filename}` (crear), `GET /files/{filename}` (descargar), `PUT /files/{filename}` (actualizar), `DELETE /files/{filename}` (eliminar) y `GET /files/{filename}/info` (metadata). **Importante:** los endpoints de subida y actualización leen el body del request directamente como `InputStream` en vez de usar `MultipartFile` — esta decisión se explica en la siguiente sección.
+
+---
+
+### `FileService.java`
+
+Capa de servicio que encapsula toda la lógica de I/O contra el File Storage. Inicializa el directorio raíz (`STORAGE_PATH`) en el `@PostConstruct`, y expone métodos para listar, leer, eliminar y obtener metadata de archivos usando la API moderna de `java.nio.file`. Centraliza el manejo de errores con `ResponseStatusException` para devolver códigos HTTP apropiados.
+
+---
+
+### Endpoints disponibles
+
+| Método | Ruta | Descripción | Body |
+|--------|------|-------------|------|
+| `GET` | `/actuator/health` | Health check | — |
+| `GET` | `/files` | Listar todos los archivos | — |
+| `POST` | `/files/{filename}` | Subir archivo nuevo | `form-data` (campo `file`) |
+| `GET` | `/files/{filename}` | Descargar archivo | — |
+| `PUT` | `/files/{filename}` | Actualizar archivo existente | `form-data` (campo `file`) |
+| `DELETE` | `/files/{filename}` | Eliminar archivo | — |
+| `GET` | `/files/{filename}/info` | Ver metadata del archivo | — |
+
+---
+
+## ⚠️ Por qué NO usamos Multipart (en Spring Boot)
+
+> 📌 **Aclaración importante:** "no usamos Multipart" se refiere a que en Spring Boot **no usamos el binding `MultipartFile` ni el `MultipartResolver`** del framework. El cliente (Postman) sigue enviando `multipart/form-data` exactamente igual que para el microservicio Python — lo que cambia es **cómo lo procesa el servidor**: en vez de pedirle a Spring que parsee el multipart, el controller lee el body crudo del request como `InputStream` y lo escribe directo al disco.
+
+Esta es una decisión de diseño importante en el microservicio Spring Boot que generó varios problemas durante el desarrollo y vale la pena documentarla.
+
+### Qué es Multipart
+
+Multipart es un formato HTTP que permite enviar múltiples partes en un solo request. Cada parte tiene sus propios headers y body. Se ve así por dentro:
+
+```
+--boundary123abc
+Content-Disposition: form-data; name="file"; filename="foto.png"
+Content-Type: image/png
+
+[bytes del archivo aquí]
+--boundary123abc--
+```
+
+### Para qué sirve
+
+Multipart existe para casos donde necesitas enviar un archivo junto con otros datos en el mismo request — por ejemplo, subir una foto junto con su título y descripción en un formulario HTML:
+
+```
+--boundary
+Content-Disposition: form-data; name="titulo"
+
+Mi foto de vacaciones
+--boundary
+Content-Disposition: form-data; name="file"; filename="foto.png"
+Content-Type: image/png
+
+[bytes]
+--boundary--
+```
+
+### El problema que causó en este proyecto
+
+Cuando se intentó usar la vía clásica de Spring (`@RequestParam("file") MultipartFile file`), aparecieron errores intermitentes. El Load Balancer de OCI actúa como proxy HTTP y al reenviar las peticiones a los pods **modifica o pierde el header `Content-Type`**, incluyendo el `boundary` que el parser de multipart necesita para saber dónde termina una parte y empieza la siguiente.
+
+Sin el boundary el `MultipartResolver` de Spring no puede parsear el body y arroja:
+
+```
+InvalidContentTypeException: the request doesn't contain a multipart/form-data
+or multipart/mixed stream, content type header is null
+```
+
+### La solución que aplicamos
+
+En vez de depender del `MultipartResolver` de Spring, el `FileController.java` recibe directamente el `HttpServletRequest` y lee el body crudo con `request.getInputStream()`, escribiéndolo al disco sin pedirle al framework que lo interprete:
+
+```java
+try (InputStream is = request.getInputStream()) {
+    Files.copy(is, dest);
+}
+```
+
+Así el cliente puede seguir mandando `multipart/form-data` (igual que para FastAPI) sin que importe si el LB altera o no el `Content-Type` — el controller no lo necesita para guardar los bytes.
+
+### Comparación
+
+| | `MultipartFile` de Spring | `HttpServletRequest` + `InputStream` |
+|---|---|---|
+| Necesita `Content-Type` con boundary intacto | ✅ Sí (frágil tras el LB) | ❌ No (robusto) |
+| Parsea automáticamente las "parts" | ✅ Sí | ❌ No (no hace falta) |
+| Útil cuando hay varios campos en el form | ✅ Sí | ⚠️ Habría que parsear a mano |
+| Para esta API (un solo archivo, nombre en la URL) | ❌ Frágil | ✅ Correcto |
+
+> 💡 Ambos microservicios (Python y Spring Boot) reciben `multipart/form-data` desde el cliente. La diferencia está en el servidor: FastAPI usa su parser interno y Spring Boot **bypasea** el suyo leyendo el `InputStream` directamente.
+
+---
+
+### `Dockerfile` (Spring Boot)
+
+Construye la imagen usando un **multi-stage build**: el primer stage usa `maven:3.9.6-eclipse-temurin-17` para compilar el JAR; el segundo stage usa solo `eclipse-temurin:17-jre` y copia únicamente el JAR compilado. La imagen final no incluye Maven, código fuente ni dependencias de compilación — es mucho más liviana y segura. Define `STORAGE_PATH=/mnt/filestore` y `JAVA_OPTS` con límites de heap (256m–512m), expone el puerto 8080 y arranca con `java -jar`.
+
+---
+
 ## 📦 Fase 6 — Publicar la Imagen en OCIR
 
-### 6.1 — Crear repositorio en OCIR
+### 6.1 — Crear repositorios en OCIR
 
 1. **Developer Services → Container Registry → Create Repository**
-   - **Name:** `filestore-api`
+   - Crea **un** repositorio privados:
+     - `filestore-api`
    - **Access:** Private
-2. Anota el **namespace** de OCIR (algo como `axyz1234abc`, visible en la pantalla)
+2. Anota el **namespace** de OCIR (algo como `axyz1234abc`, visible en la pantalla).
 
 ### 6.2 — Generar Auth Token
 
 1. **User Settings → Auth Tokens → Generate Token**
-   - **Description:** `ocir-poc`
+   - **Description:** `authtkn`
 2. Copia y guarda el token (solo se muestra una vez)
 
-### 6.3 — Build y Push de la imagen
+### 6.3 — Build y Push de las imágenes
 
 ```bash
 # Variables — ajusta con tus valores reales
 REGION="us-ashburn-1"
 NAMESPACE="axyz1234abc"
-REPO="poc/filestore-api"
 TAG="v1.0"
 
-# Login en OCIR
+# Login en OCIR (un único login sirve para ambas imágenes)
 docker login ${REGION}.ocir.io \
   -u "${NAMESPACE}/<tu_username_oci>" \
   -p "<tu_auth_token>"
 
-# Build de la imagen
-docker build -t ${REGION}.ocir.io/${NAMESPACE}/${REPO}:${TAG} .
+# ── Imagen Python ───────────────────────────────────
+cd app/python
+docker build -t ${REGION}.ocir.io/${NAMESPACE}/filestore-api:${TAG} .
+docker push ${REGION}.ocir.io/${NAMESPACE}/filestore-api:${TAG}
 
-# Push al registry
-docker push ${REGION}.ocir.io/${NAMESPACE}/${REPO}:${TAG}
+# ── Imagen Spring Boot ──────────────────────────────
+cd ../springboot
+mvn clean package -DskipTests
+docker build -t ${REGION}.ocir.io/${NAMESPACE}/filestore-api-java:${TAG} .
+docker push ${REGION}.ocir.io/${NAMESPACE}/filestore-api-java:${TAG}
 ```
+
+> 💡 **Prerrequisitos para Spring Boot en el Bastion:** instalar JDK 17 (`sudo dnf install java-17-openjdk-devel -y`) y Maven (`sudo dnf install maven -y`), y exportar `JAVA_HOME=/usr/lib/jvm/java-17-openjdk`.
 
 ---
 
@@ -478,6 +659,24 @@ Expone el Deployment al mundo exterior creando un Load Balancer de OCI automáti
 
 ---
 
+### Manifiestos del microservicio Spring Boot
+
+Estos archivos viven en `app/springboot/oke-manifests/` y reutilizan el `namespace`, `pv` y `pvc` ya creados para Python.
+
+#### `deployment.yaml` (Spring Boot)
+
+> ⚠️ Reemplaza la imagen con la URL real de tu OCIR (`filestore-api-java:v1.0`)
+
+Define el Deployment `filestore-api-java` con 2 réplicas. Usa la imagen Java pusheada a OCIR, expone el puerto 8080 (puerto por defecto de Spring Boot), monta el mismo `pvc-filestore` en `/mnt/filestore` y define la variable `STORAGE_PATH`. Los probes apuntan a `/actuator/health` (en vez de `/health` como en Python) porque Spring Boot expone los health checks bajo el prefijo del actuator. Los límites de memoria se ajustan a la JVM (request 512Mi / limit 768Mi) ya que Java consume más RAM que Python.
+
+#### `service.yaml` (Spring Boot)
+
+> ⚠️ Reemplaza `<SUBNET_LB_OCID>` con el OCID real de `sn-lb`
+
+Crea un Service `filestore-api-java-svc` de tipo LoadBalancer que aprovisiona un **segundo Load Balancer en OCI** independiente del de Python. Esto da a cada microservicio su propia IP pública para poder probarlos por separado. El servicio recibe tráfico en el puerto 80 y lo redirige al puerto 8080 de los pods Spring Boot.
+
+---
+
 ## 🚀 Fase 8 — Desplegar todo en OKE
 
 ### Copiar manifiestos al Bastion
@@ -493,8 +692,9 @@ ssh -i ~/.ssh/tu_llave opc@<IP_BASTION>
 ### Aplicar todos los manifiestos
 
 ```bash
+# ── Recursos compartidos ──────────────────────────────
 # 1. Crear namespace
-kubectl apply -f ~/k8s/namespace.yaml
+kubectl apply -f ~/k8s/python/namespace.yaml
 
 # 2. Crear secret para OCIR
 kubectl create secret docker-registry ocir-secret \
@@ -504,26 +704,38 @@ kubectl create secret docker-registry ocir-secret \
   --docker-email="<email>" \
   -n poc-filestore
 
-# 3. Crear el volumen persistente y el claim
-kubectl apply -f ~/k8s/pv.yaml
-kubectl apply -f ~/k8s/pvc.yaml
+# 3. Crear el volumen persistente y el claim (compartidos por ambos micros)
+kubectl apply -f ~/k8s/python/pv.yaml
+kubectl apply -f ~/k8s/python/pvc.yaml
 
 # 4. Verificar que el PVC quede en estado Bound
 kubectl get pvc -n poc-filestore
 # STATUS debe ser "Bound" antes de continuar
 
-# 5. Desplegar la aplicación
-kubectl apply -f ~/k8s/deployment.yaml
+# ── Microservicio Python ──────────────────────────────
+kubectl apply -f ~/k8s/python/deployment.yaml
+kubectl apply -f ~/k8s/python/service.yaml
 
-# 6. Exponer con Load Balancer
-kubectl apply -f ~/k8s/service.yaml
+# ── Microservicio Spring Boot ─────────────────────────
+kubectl apply -f ~/k8s/springboot/deployment.yaml
+kubectl apply -f ~/k8s/springboot/service.yaml
 
-# 7. Monitorear el despliegue
+# ── Monitoreo ─────────────────────────────────────────
 kubectl rollout status deployment/filestore-api -n poc-filestore
+kubectl rollout status deployment/filestore-api-java -n poc-filestore
 kubectl get pods -n poc-filestore
 kubectl get svc -n poc-filestore
-# Espera ~2-3 minutos hasta que aparezca la EXTERNAL-IP del LB
+# Espera ~2-3 minutos hasta que aparezcan las EXTERNAL-IP de ambos LBs
 ```
+
+> 💡 **Redesplegar tras cambios en Spring Boot:**
+> ```bash
+> cd app/springboot && \
+>   mvn clean package -DskipTests && \
+>   docker build -t ${REGION}.ocir.io/${NAMESPACE}/filestore-api-java:${TAG} . && \
+>   docker push ${REGION}.ocir.io/${NAMESPACE}/filestore-api-java:${TAG} && \
+>   kubectl rollout restart deployment/filestore-api-java -n poc-filestore
+> ```
 
 ---
 
@@ -625,6 +837,34 @@ kubectl rollout status deployment/filestore-api -n poc-filestore
 | LB sin `EXTERNAL-IP` | OCID de sn-lb incorrecto en el annotation | Revisar el `service.yaml` y re-aplicar |
 | Error 500 al subir | `/mnt/filestore` sin permisos de escritura | Verificar el Export del File Storage |
 | SSH al Bastion falla | Puerto 22 bloqueado en Security List | Agregar regla de ingress en `sn-bastion` |
+| `InvalidContentTypeException` (Spring Boot) | Se intentó parsear el body con `MultipartFile` pero el LB removió el `Content-Type`/boundary | Recibir `HttpServletRequest` y leer `request.getInputStream()` directamente, sin depender del `MultipartResolver` |
+| `ImagePullBackOff` (Spring Boot) | Secret OCIR expirado o imagen Java no pusheada | Recrear el secret y verificar el push |
+| Pod Spring Boot en `0/1 Running` | Spring tarda ~15s en arrancar | Esperar — el `readinessProbe` lo maneja |
+
+---
+
+## 📮 Colección de Postman
+
+En la carpeta `Postman/` del repositorio se incluye el archivo `POC_OKE-FileStorage.json` con todas las peticiones pre-configuradas para probar **ambos microservicios** (Python y Spring Boot) sobre el cluster desplegado.
+
+### ¿Qué es y cómo funciona?
+
+Una **colección de Postman** es un archivo JSON exportable que agrupa peticiones HTTP organizadas por carpetas. Al importarla en Postman, obtienes todos los requests listos para ejecutar — con su método, URL, headers y body ya rellenos — sin tener que escribirlos a mano.
+
+La colección incluye dos sub-carpetas:
+
+- **`Python`** — peticiones contra el microservicio FastAPI (`/health`, `/files`, `/files/{filename}`, etc.). Las subidas usan `multipart/form-data` (campo `file`).
+- **`SpringBoot`** — peticiones contra el microservicio Java (`/actuator/health`, `/files`, `/files/{filename}`, etc.). Las subidas también usan `multipart/form-data` (campo `file`) — exactamente igual que en Python. La diferencia está del lado del servidor: el controller Spring Boot lee el body como `InputStream` en vez de usar el `MultipartResolver`, ver [Por qué NO usamos Multipart](#-por-qué-no-usamos-multipart).
+
+### Cómo usarla
+
+1. Abre Postman → **File → Import**
+2. Arrastra el archivo `Postman/POC_OKE-FileStorage.json`
+3. Reemplaza la IP `132.226.48.218` (la del Load Balancer usado durante la POC) por la `EXTERNAL-IP` de **tu** Load Balancer — usa la IP del LB de Python para los requests Python, y la del LB de Spring Boot para los requests SpringBoot (`kubectl get svc -n poc-filestore`).
+4. Para los `POST`/`PUT` de subida, en la pestaña **Body** selecciona el archivo local que vas a enviar.
+5. Ejecuta cada request con **Send** y revisa la respuesta.
+
+> 💡 Tanto en la carpeta **Python** como en **SpringBoot** los requests de subida usan **`form-data`** con un campo `file` que contiene el archivo a subir. No hay que cambiar a `binary`.
 
 ---
 
@@ -645,8 +885,10 @@ kubectl rollout status deployment/filestore-api -n poc-filestore
 | `poc/filestore-api` | OCIR Repository | Registry privado de imagen Docker |
 | `pv-filestore` | PersistentVolume K8s | Mapeo NFS en Kubernetes |
 | `pvc-filestore` | PersistentVolumeClaim K8s | Claim del volumen para los pods |
-| `filestore-api` | Deployment K8s (2 réplicas) | Microservicio FastAPI |
-| `filestore-api-svc` | LoadBalancer Service K8s | Exposición pública HTTP |
+| `filestore-api` | Deployment K8s (2 réplicas) | Microservicio FastAPI (Python) |
+| `filestore-api-svc` | LoadBalancer Service K8s | Exposición pública HTTP del micro Python |
+| `filestore-api-java` | Deployment K8s (2 réplicas) | Microservicio Spring Boot (Java) |
+| `filestore-api-java-svc` | LoadBalancer Service K8s | Exposición pública HTTP del micro Spring Boot |
 
 ---
 
@@ -730,8 +972,12 @@ Borrado del archivo `documento1.pdf` desde el File Storage. La respuesta **200 O
 
 ---
 
+> 📌 **Nota sobre los resultados mostrados:** las capturas anteriores corresponden al **microservicio Python (FastAPI)**. El microservicio **Spring Boot** expone los mismos endpoints CRUD y se comporta de forma equivalente sobre el mismo `pvc-filestore` compartido. Si quieres reproducir las pruebas contra la versión Spring Boot, importa la **[colección de Postman](#-colección-de-postman)** incluida en `Postman/POC_OKE-FileStorage.json` — contiene los requests pre-configurados para ambos microservicios y solo necesitas reemplazar la IP del Load Balancer por la tuya.
+
+---
+
 <div align="center">
 
-**Construido con** ☁️ Oracle Cloud Infrastructure · 🐍 Python / FastAPI · ☸️ Kubernetes
+**Construido con** ☁️ Oracle Cloud Infrastructure · 🐍 Python / FastAPI · ☕ Java / Spring Boot · ☸️ Kubernetes
 
 </div>
