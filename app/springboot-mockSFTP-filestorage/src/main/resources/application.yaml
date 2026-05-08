@@ -1,0 +1,21 @@
+server:
+  port: 8080
+
+filestore:
+  path: ${STORAGE_PATH:/mnt/filestore}
+
+sftp:
+  host: ${SFTP_HOST:sftp-server-svc}
+  port: ${SFTP_PORT:22}
+  username: ${SFTP_USERNAME:sftpuser}
+  password: ${SFTP_PASSWORD:sftppass123}
+  remote-dir: ${SFTP_REMOTE_DIR:/upload}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: always

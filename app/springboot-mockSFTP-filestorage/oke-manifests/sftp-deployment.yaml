@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sftp-server
+  namespace: poc-filestore
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sftp-server
+  template:
+    metadata:
+      labels:
+        app: sftp-server
+    spec:
+      initContainers:
+        - name: fix-permissions
+          image: docker.io/library/busybox:latest
+          command: ["sh", "-c", "chmod 777 /home/sftpuser/upload"]
+          volumeMounts:
+            - name: filestore-vol
+              mountPath: /home/sftpuser/upload
+      containers:
+        - name: sftp-server
+          image: docker.io/atmoz/sftp:latest
+          args:
+            - "sftpuser:sftppass123:::upload"
+          ports:
+            - containerPort: 22
+          volumeMounts:
+            - name: filestore-vol
+              mountPath: /home/sftpuser/upload
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "200m"
+              memory: "256Mi"
+      volumes:
+        - name: filestore-vol
+          persistentVolumeClaim:
+            claimName: pvc-filestore

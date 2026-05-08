@@ -1,6 +1,6 @@
 {
   "info": {
-    "_postman_id": "d054179d-ea37-4aff-971a-0e661d440af4",
+    "_postman_id": "2d467565-018c-4116-9478-e518e84cbdef",
     "name": "POC",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
     "_exporter_id": "45032221"
@@ -378,6 +378,178 @@
                 },
                 "url": {
                   "raw": "http://129.158.225.40/files/documento1.png",
+                  "protocol": "http",
+                  "host": [
+                    "129",
+                    "158",
+                    "225",
+                    "40"
+                  ],
+                  "path": [
+                    "files",
+                    "documento1.png"
+                  ]
+                }
+              },
+              "response": []
+            }
+          ]
+        },
+        {
+          "name": "SpringBoot-SFTP",
+          "item": [
+            {
+              "name": "Get Files",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "http://129.153.139.10/files",
+                  "protocol": "http",
+                  "host": [
+                    "129",
+                    "153",
+                    "139",
+                    "10"
+                  ],
+                  "path": [
+                    "files"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "HealthCheck",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "http://129.158.225.40/actuator/health",
+                  "protocol": "http",
+                  "host": [
+                    "129",
+                    "158",
+                    "225",
+                    "40"
+                  ],
+                  "path": [
+                    "actuator",
+                    "health"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Download File",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "http://129.158.225.40/files/documento.pdf",
+                  "protocol": "http",
+                  "host": [
+                    "129",
+                    "158",
+                    "225",
+                    "40"
+                  ],
+                  "path": [
+                    "files",
+                    "documento.pdf"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Upload File",
+              "protocolProfileBehavior": {
+                "disabledSystemHeaders": {}
+              },
+              "request": {
+                "method": "POST",
+                "header": [],
+                "body": {
+                  "mode": "formdata",
+                  "formdata": [
+                    {
+                      "key": "file",
+                      "type": "file",
+                      "uuid": "67a99cee-661e-492b-867c-571225eae63e",
+                      "src": "/Users/msimonz/Downloads/DBsync.png"
+                    }
+                  ]
+                },
+                "url": {
+                  "raw": "http://129.153.139.10/files/imagen.png",
+                  "protocol": "http",
+                  "host": [
+                    "129",
+                    "153",
+                    "139",
+                    "10"
+                  ],
+                  "path": [
+                    "files",
+                    "imagen.png"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Update File",
+              "request": {
+                "method": "PUT",
+                "header": [],
+                "body": {
+                  "mode": "formdata",
+                  "formdata": [
+                    {
+                      "key": "file",
+                      "type": "file",
+                      "uuid": "f5933517-8504-44e2-94c5-68ba3f0c35dc",
+                      "src": "/Users/msimonz/Downloads/Todavía estás vivo.pdf"
+                    }
+                  ]
+                },
+                "url": {
+                  "raw": "http://129.153.139.10/files/documento1.png",
+                  "protocol": "http",
+                  "host": [
+                    "129",
+                    "158",
+                    "225",
+                    "40"
+                  ],
+                  "path": [
+                    "files",
+                    "documento1.png"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Delete File",
+              "request": {
+                "method": "DELETE",
+                "header": [],
+                "body": {
+                  "mode": "formdata",
+                  "formdata": [
+                    {
+                      "key": "file",
+                      "type": "file",
+                      "uuid": "f5933517-8504-44e2-94c5-68ba3f0c35dc",
+                      "src": "/Users/msimonz/Downloads/Todavía estás vivo.pdf"
+                    }
+                  ]
+                },
+                "url": {
+                  "raw": "http://129.153.139.10/files/documento1.png",
                   "protocol": "http",
                   "host": [
                     "129",

@@ -1,6 +1,6 @@
-# 🗂️ OCI FileStorage CRUD API — POC Completa (Python + Spring Boot)
+# 🗂️ OCI FileStorage CRUD API — POC Completa (Python + Spring Boot + Mock SFTP)
 
-> Dos microservicios REST (uno en **Python/FastAPI** y otro en **Java/Spring Boot**) sobre **OCI File Storage (NFS)**, desplegados en **Oracle Kubernetes Engine (OKE)** compartiendo el mismo volumen persistente, administrados desde un **Bastion Host**.
+> Tres implementaciones de microservicios REST sobre **OCI File Storage (NFS)** desplegados en **Oracle Kubernetes Engine (OKE)** y administrados desde un **Bastion Host**: uno en **Python/FastAPI**, otro en **Java/Spring Boot** y un tercero en **Spring Boot + Mock SFTP** que se comporta como intermediario transparente para clientes que ya hablan SFTP — el archivo aterriza en el mismo File Storage sin que el cliente note la diferencia.
 
 ---
 
@@ -8,13 +8,21 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![Java](https://img.shields.io/badge/Java-17-ED8B00?style=for-the-badge&logo=openjdk&logoColor=white)](https://openjdk.org/projects/jdk/17/)
 [![Spring Boot](https://img.shields.io/badge/Spring_Boot-3.2.5-6DB33F?style=for-the-badge&logo=spring-boot&logoColor=white)](https://spring.io/projects/spring-boot)
+[![JSch](https://img.shields.io/badge/JSch-mwiede_fork-orange?style=for-the-badge)](https://github.com/mwiede/jsch)
+[![atmoz/sftp](https://img.shields.io/badge/SFTP-atmoz%2Fsftp-blue?style=for-the-badge)](https://hub.docker.com/r/atmoz/sftp)
 [![Kubernetes](https://img.shields.io/badge/Kubernetes-OKE-326CE5?style=for-the-badge&logo=kubernetes&logoColor=white)](https://docs.oracle.com/en-us/iaas/Content/ContEng/home.htm)
 [![OCI](https://img.shields.io/badge/Oracle_Cloud-Infrastructure-F80000?style=for-the-badge&logo=oracle&logoColor=white)](https://cloud.oracle.com/)
 [![Docker](https://img.shields.io/badge/Docker-Enabled-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://www.docker.com/)
 
 ---
 
-## 📐 Arquitectura
+## 📐 Arquitecturas
+
+La POC contiene **dos arquitecturas distintas** que comparten el mismo `pvc-filestore` sobre OCI File Storage:
+
+### Arquitectura 1 — Acceso REST directo (Python + Spring Boot)
+
+Los microservicios FastAPI y Spring Boot exponen un CRUD REST y leen/escriben directamente sobre el volumen NFS. Es la implementación base de la POC.
 
 ```
                         ┌──────────────────────────────────────────────────────┐
@@ -42,6 +50,37 @@
 
 > 💡 El mismo `pvc-filestore` es montado por el microservicio Python y el microservicio Spring Boot simultáneamente. Un archivo subido por uno es visible inmediatamente por el otro, gracias al modo de acceso `ReadWriteMany` de NFS.
 
+### Arquitectura 2 — Mock SFTP intermedio (Spring Boot + atmoz/sftp)
+
+Pensada para clientes existentes que ya hablan SFTP contra un servidor on-premise y migran a OCI sin tocar su código. El microservicio Spring Boot recibe el request HTTP y lo reenvía vía SFTP a un contenedor `atmoz/sftp` corriendo dentro del cluster, cuyo directorio `/home/sftpuser/upload` está montado sobre el mismo `pvc-filestore`. Para el cliente todo se ve como un SFTP convencional, pero los archivos terminan en el OCI File Storage.
+
+```
+                        ┌──────────────────────────────────────────────────────┐
+                        │                  OCI Cloud                           │
+                        │                                                      │
+    Tu máquina          │    ┌──────────────┐      ┌──────────────────────┐    │
+    local/internet ─────┼───►│ Load Balancer│─────►│   OKE Cluster        │    │
+                        │    │ (sn-lb)      │      │  ┌────────────────┐  │    │
+                        │    └──────────────┘      │  │ Pod: SpringBoot│  │    │
+                        │                          │  │  Mock SFTP API │  │    │
+                        │                          │  └───────┬────────┘  │    │
+                        │                          │          │ SFTP :22  │    │
+                        │                          │  ┌───────▼────────┐  │    │
+                        │                          │  │ Pod: atmoz/sftp│  │    │
+                        │                          │  │ ClusterIP only │  │    │
+                        │                          │  └───────┬────────┘  │    │
+                        │                          └──────────┼───────────┘    │
+                        │                                     │                │
+                        │                         ┌───────────▼───────────┐    │
+                        │                         │  OCI File Storage     │    │
+                        │                         │  (NFS Mount Target)   │    │
+                        │                         │  /filestore           │    │
+                        │                         └───────────────────────┘    │
+                        └──────────────────────────────────────────────────────┘
+```
+
+> 💡 El cliente (Postman u otro microservicio) nunca ve al SFTP — solo habla HTTP contra el Spring Boot. Internamente el Spring Boot abre una sesión SSH/SFTP contra `sftp-server-svc:22` (ClusterIP, no expuesto al exterior) y deja el archivo en `/home/sftpuser/upload`, que está montado sobre el File Storage. El resultado neto: un archivo subido por SFTP es visible desde los pods Python y Spring Boot directos por el mismo PVC.
+
 ---
 
 ## 📋 Tabla de Contenidos
@@ -54,6 +93,8 @@
 - [Fase 5 — Código Python](#-fase-5--el-microservicio-en-python)
 - [Fase 5B — Código Spring Boot](#-fase-5b--el-microservicio-en-spring-boot)
 - [Por qué NO usamos Multipart](#-por-qué-no-usamos-multipart)
+- [Fase 5C — Spring Boot + Mock SFTP](#-fase-5c--el-microservicio-spring-boot--mock-sftp)
+- [Error de permisos en /upload (Mock SFTP)](#-error-de-permisos-en-el-sftp--permission-denied)
 - [Fase 6 — OCIR (Imagen Docker)](#-fase-6--publicar-la-imagen-en-ocir)
 - [Fase 7 — Manifiestos K8s](#-fase-7--manifiestos-de-kubernetes)
 - [Fase 8 — Despliegue](#-fase-8--desplegar-todo-en-oke)
@@ -561,6 +602,158 @@ Construye la imagen usando un **multi-stage build**: el primer stage usa `maven:
 
 ---
 
+## 🔐 Fase 5C — El Microservicio Spring Boot + Mock SFTP
+
+Tercera implementación de la POC. Mantiene la misma fachada REST que las anteriores, pero internamente actúa como **intermediario SFTP**: recibe HTTP, abre una sesión SSH/SFTP contra un contenedor `atmoz/sftp` corriendo en el mismo cluster, y deposita el archivo en el directorio `upload` que el SFTP tiene montado sobre el `pvc-filestore`. El cliente sigue creyendo que está hablando con un SFTP "real" — el File Storage queda escondido detrás.
+
+### Propósito
+
+El cliente tiene microservicios on-premise que envían archivos a un servidor SFTP. Migrar a OCI implicaría reemplazar ese SFTP por un File Storage, pero **cambiar todos los clientes que ya hablan SFTP es costoso y riesgoso**. La solución: un Mock SFTP que habla SFTP por fuera y por dentro está montado sobre el File Storage. Los clientes existentes no necesitan ningún cambio.
+
+### Estructura del proyecto
+
+```
+app/springboot-mockSFTP-filestorage/
+├── pom.xml
+├── Dockerfile
+├── oke-manifests/
+│   ├── sftp-deployment.yaml        ← contenedor atmoz/sftp
+│   ├── sftp-service.yaml           ← ClusterIP interno para el SFTP
+│   ├── deployment.yaml             ← Spring Boot que llama al SFTP
+│   └── service.yaml                ← LoadBalancer público de la API
+└── src/main/
+    ├── java/com/poc/filestore/
+    │   ├── FileStoreApplication.java
+    │   ├── config/SftpConfig.java
+    │   ├── controller/FileController.java
+    │   └── service/SftpService.java
+    └── resources/application.yaml
+```
+
+> Reutiliza los manifiestos compartidos (`namespace`, `pv`, `pvc`) ubicados en `general-oke-manifests/`.
+
+---
+
+### `pom.xml` (Mock SFTP)
+
+Define el proyecto Maven con Spring Boot 3.2.5 y Java 17. Suma una dependencia clave: el cliente JSch del fork **`com.github.mwiede:jsch`** en vez del original `com.jcraft:jsch`. Más detalle en la siguiente subsección.
+
+---
+
+### `application.yaml` (Mock SFTP)
+
+Archivo de configuración. Define el puerto 8080, expone el endpoint `/actuator/health` y agrega un bloque `sftp:` con las credenciales y datos de conexión al contenedor SFTP (`host`, `port`, `username`, `password`, `remote-dir`). Cada valor se puede sobrescribir con variables de entorno (`SFTP_HOST`, `SFTP_PORT`, `SFTP_USERNAME`, `SFTP_PASSWORD`, `SFTP_REMOTE_DIR`) — útil para inyectar las credenciales desde el `Deployment` de Kubernetes sin tocar el JAR.
+
+---
+
+### `FileStoreApplication.java` (Mock SFTP)
+
+Punto de entrada del microservicio. Igual que en las otras implementaciones, una clase con `@SpringBootApplication` que arranca el contenedor Spring y deja el servidor Tomcat escuchando en el puerto configurado.
+
+---
+
+### `SftpConfig.java`
+
+Clase `@ConfigurationProperties(prefix = "sftp")` que mapea el bloque `sftp:` del `application.yaml` a un bean fuertemente tipado. Centraliza host, puerto, usuario, contraseña y `remoteDir` para que el resto del código no tenga que leer propiedades sueltas — se inyecta como dependencia donde haga falta.
+
+---
+
+### `SftpService.java`
+
+Capa de servicio que encapsula toda la interacción con el SFTP. Expone cuatro operaciones — `uploadFile`, `downloadFile`, `deleteFile` y `listFiles` — y cada una abre una sesión JSch contra el contenedor SFTP, navega al `remoteDir` (`/upload`), realiza la operación y cierra la conexión. Desactiva `StrictHostKeyChecking` porque el host es interno al cluster y su clave cambia en cada despliegue. Es el componente que sustituye al `FileService` directo de la implementación anterior — la API REST hacia afuera es la misma, pero los bytes ya no van al disco local sino a través de la red SFTP.
+
+---
+
+### `FileController.java` (Mock SFTP)
+
+Controlador REST con el mismo prefijo `/files` que las otras implementaciones, pero delegando todo el I/O al `SftpService` en vez de a un servicio de filesystem directo. Implementa `GET /files` (listar), `POST /files/{filename}` (subir, body `binary`), `GET /files/{filename}` (descargar), `DELETE /files/{filename}` (eliminar) y un `GET /files/health`. Es importante el cambio de body en el `POST`: a diferencia de las implementaciones anteriores que aceptaban `multipart/form-data`, aquí el endpoint lee el body crudo (`request.getInputStream()`) y lo reenvía tal cual al SFTP — el LB de OCI igualmente le quita el `boundary` al multipart, así que el body en Postman debe ser `binary`.
+
+---
+
+### `Dockerfile` (Mock SFTP)
+
+Mismo patrón multi-stage del Spring Boot anterior: stage de build con `maven:3.9.6-eclipse-temurin-17` que produce el JAR, stage runtime con `eclipse-temurin:17-jre` que copia solo el JAR. Expone el puerto 8080.
+
+---
+
+### `oke-manifests/sftp-deployment.yaml`
+
+Despliega el contenedor **`atmoz/sftp`** (1 réplica) que actúa como servidor SFTP dentro del cluster. Crea el usuario `sftpuser` con password `sftppass123` y le asigna el directorio `/home/sftpuser/upload`, que se monta desde el `pvc-filestore` (el mismo PVC que usan los demás microservicios). Incluye un **`initContainer`** con `busybox` que corre `chmod 777 /home/sftpuser/upload` antes de arrancar el SFTP — sin esto el upload falla con "Permission denied", ver la siguiente sección.
+
+---
+
+### `oke-manifests/sftp-service.yaml`
+
+Service `sftp-server-svc` de tipo **ClusterIP** que expone el SFTP **solo dentro del cluster** en el puerto 22. No tiene IP pública: el único cliente legítimo es el pod Spring Boot. Esto es importante por seguridad — el SFTP no debería ser accesible desde internet.
+
+---
+
+### `oke-manifests/deployment.yaml` (Spring Boot Mock SFTP)
+
+Deployment `filestore-api-java` (2 réplicas) con la imagen Spring Boot del Mock SFTP. Inyecta las credenciales SFTP por variables de entorno (`SFTP_HOST=sftp-server-svc`, `SFTP_PORT=22`, `SFTP_USERNAME=sftpuser`, `SFTP_PASSWORD=sftppass123`, `SFTP_REMOTE_DIR=/upload`) — el host es el nombre DNS del Service del SFTP dentro del cluster. Probes apuntando a `/actuator/health`, igual que en la implementación Spring Boot directa.
+
+---
+
+### `oke-manifests/service.yaml` (Spring Boot Mock SFTP)
+
+Service `filestore-api-java2-svc` de tipo **LoadBalancer** que expone el Spring Boot al exterior con su propia IP pública en el puerto 80 → 8080. Es el único punto de entrada externo de esta arquitectura — todo lo demás (SFTP, NFS) queda interno.
+
+---
+
+### Por qué `mwiede/jsch` y no `jcraft/jsch`
+
+El fork original `com.jcraft:jsch` está **abandonado desde 2016** y no soporta los algoritmos de clave SSH modernos que usa `atmoz/sftp` por defecto (ed25519, ecdsa, rsa con SHA-2). Si se intenta conectar con el JSch viejo, JSch falla con `Algorithm negotiation fail` antes incluso de pedir credenciales.
+
+El fork **`com.github.mwiede:jsch`** es un drop-in replacement (mismas clases, mismo paquete `com.jcraft.jsch.*`, mismo API), está mantenido activamente y soporta todos los algoritmos modernos. La única diferencia es el `groupId` en el `pom.xml`. Esta POC usa la versión `0.2.17`.
+
+---
+
+## ⚠️ Error de permisos en el SFTP — Permission denied
+
+Este fue el error más importante durante el despliegue de la arquitectura Mock SFTP y vale documentarlo en detalle.
+
+### El error
+
+Al intentar subir un archivo desde Postman, los logs del Spring Boot mostraban que la sesión SSH se establecía y el canal SFTP se abría correctamente, pero al ejecutar el `put` fallaba con:
+
+```
+ERROR : Error subiendo archivo al SFTP: Permission denied
+com.jcraft.jsch.SftpException: Permission denied
+```
+
+### La causa
+
+El directorio `/home/sftpuser/upload` dentro del contenedor SFTP está montado desde el `pvc-filestore`. Ese PVC es el mismo File Storage NFS que ya usan los microservicios Python y Spring Boot directo, donde los archivos son propiedad de **`root`** (UID 0).
+
+Cuando `atmoz/sftp` crea el usuario `sftpuser` (UID por defecto 1001), ese usuario **no tiene permisos de escritura** sobre un directorio que pertenece a `root`. La conexión SSH funciona porque solo necesita validar credenciales del usuario; pero al intentar escribir el archivo en `/home/sftpuser/upload`, el filesystem responde con `EACCES`, que JSch traduce a `Permission denied`.
+
+```
+Contenedor SFTP
+├── /home/sftpuser/          ← propiedad de sftpuser ✅
+│   └── upload/              ← montado desde PVC, propiedad de root ❌
+│       └── archivo.pdf      ← sftpuser no puede escribir aquí
+```
+
+### La solución — initContainer
+
+Se agrega un **`initContainer`** en `sftp-deployment.yaml` que corre **antes** de que arranque el contenedor SFTP. El initContainer corre como `root` por defecto (a diferencia del SFTP, que corre como `sftpuser`), monta el mismo volumen y ejecuta `chmod 777 /home/sftpuser/upload`. Cuando el contenedor SFTP arranca, el directorio ya tiene permisos abiertos y `sftpuser` puede escribir sin problemas.
+
+El flujo de arranque del pod queda así:
+
+```
+1. initContainer: fix-permissions (busybox, root)
+   └── chmod 777 /home/sftpuser/upload
+   └── termina exitosamente
+       ↓
+2. Container: sftp-server (atmoz/sftp, sftpuser)
+   └── /home/sftpuser/upload ya tiene permisos 777
+   └── sftpuser puede leer y escribir ✅
+```
+
+> ⚠️ `chmod 777` es deliberadamente permisivo y está bien para una POC. En producción debería usarse `chmod 755` con el UID/GID correcto del usuario SFTP, idealmente alineando el `fsGroup` del pod con el ownership del NFS (o usando un `securityContext` con `runAsUser` específico) para evitar abrir el directorio a "todos".
+
+---
+
 ## 📦 Fase 6 — Publicar la Imagen en OCIR
 
 ### 6.1 — Crear repositorios en OCIR
@@ -887,8 +1080,11 @@ La colección incluye dos sub-carpetas:
 | `pvc-filestore` | PersistentVolumeClaim K8s | Claim del volumen para los pods |
 | `filestore-api` | Deployment K8s (2 réplicas) | Microservicio FastAPI (Python) |
 | `filestore-api-svc` | LoadBalancer Service K8s | Exposición pública HTTP del micro Python |
-| `filestore-api-java` | Deployment K8s (2 réplicas) | Microservicio Spring Boot (Java) |
-| `filestore-api-java-svc` | LoadBalancer Service K8s | Exposición pública HTTP del micro Spring Boot |
+| `filestore-api-java` | Deployment K8s (2 réplicas) | Microservicio Spring Boot (Java) — directo a NFS o vía Mock SFTP según despliegue |
+| `filestore-api-java-svc` | LoadBalancer Service K8s | Exposición pública HTTP del micro Spring Boot directo |
+| `filestore-api-java2-svc` | LoadBalancer Service K8s | Exposición pública HTTP del micro Spring Boot Mock SFTP |
+| `sftp-server` | Deployment K8s (1 réplica) | Contenedor `atmoz/sftp` con `initContainer` de permisos |
+| `sftp-server-svc` | ClusterIP Service K8s | SFTP interno solo accesible desde dentro del cluster |
 
 ---
 
@@ -974,10 +1170,12 @@ Borrado del archivo `documento1.pdf` desde el File Storage. La respuesta **200 O
 
 > 📌 **Nota sobre los resultados mostrados:** las capturas anteriores corresponden al **microservicio Python (FastAPI)**. El microservicio **Spring Boot** expone los mismos endpoints CRUD y se comporta de forma equivalente sobre el mismo `pvc-filestore` compartido. Si quieres reproducir las pruebas contra la versión Spring Boot, importa la **[colección de Postman](#-colección-de-postman)** incluida en `Postman/POC_OKE-FileStorage.json` — contiene los requests pre-configurados para ambos microservicios y solo necesitas reemplazar la IP del Load Balancer por la tuya.
 
+> 📌 **Nota sobre el microservicio Spring Boot + Mock SFTP:** la tercera implementación ([Fase 5C](#-fase-5c--el-microservicio-spring-boot--mock-sftp)) expone el **mismo CRUD** sobre los mismos endpoints `/files`, así que el comportamiento observable desde Postman es equivalente al de las capturas anteriores — un archivo subido por el endpoint `POST /files/{filename}` aparece en el mismo `pvc-filestore` y es visible desde los pods Python y Spring Boot directo. La única diferencia visible para el cliente es que el body del `POST`/`PUT` debe enviarse como `binary` en vez de `form-data` (el LB de OCI altera el `Content-Type` del multipart, ver [Por qué NO usamos Multipart](#-por-qué-no-usamos-multipart)). Internamente el archivo viaja Spring Boot → SFTP → File Storage, pero el resultado neto sobre el NFS es idéntico al de las otras dos implementaciones.
+
 ---
 
 <div align="center">
 
-**Construido con** ☁️ Oracle Cloud Infrastructure · 🐍 Python / FastAPI · ☕ Java / Spring Boot · ☸️ Kubernetes
+**Construido con** ☁️ Oracle Cloud Infrastructure · 🐍 Python / FastAPI · ☕ Java / Spring Boot · 🔐 JSch (mwiede) · 📦 atmoz/sftp · ☸️ Kubernetes
 
 </div>
